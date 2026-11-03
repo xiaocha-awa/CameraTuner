@@ -115,17 +115,17 @@ public class AboutPage {
         thanksBox.setPadding(a.dp(20), a.dp(18), a.dp(20), a.dp(18));
 
         TextView thanksText = new TextView(a);
-        thanksText.setText("本模块部分功能参考自 XiaomiCamPort 的实现思路，包括焦段重映射、档位循环修正等。");
+        thanksText.setText("\u90e8\u5206\u529f\u80fd\u53c2\u8003\u81ea XiaomiCamPort");
         thanksText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         thanksText.setTextColor(MainActivity.C_TEXT_MAIN);
         thanksText.setLineSpacing(a.dp(4), 1f);
         thanksBox.addView(thanksText);
 
         TextView thanksAuthor = new TextView(a);
-        thanksAuthor.setText("酷安 @歪锅包肉RoddyWise");
+        thanksAuthor.setText("@\u6b6a\u9505\u5305\u8089RoddyWise");
         thanksAuthor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         thanksAuthor.setTextColor(MainActivity.C_ACCENT);
-        thanksAuthor.setPadding(0, a.dp(10), 0, 0);
+        thanksAuthor.setPadding(0, a.dp(6), 0, 0);
         thanksBox.addView(thanksAuthor);
 
         card3.addView(thanksBox);
@@ -468,7 +468,17 @@ public class AboutPage {
 
     /** 本地兜底更新日志 */
     private static final String LOCAL_CHANGELOG =
-            "v1.9\n"
+            "v2.0\n"
+          + "1. 修复 2 亿像素模式拍照闪退\n"
+          + "2. 新增水印品牌 logo 切换（小米 / 红米 / POCO）\n"
+          + "3. 新增 电影模式开关\n"
+          + "4. 隐藏 实况运镜\n"
+          + "5. 优化 自定义水印设置\n"
+          + "6. 优化 焦段重映射逻辑\n"
+          + "\n"
+          + "[本次改动较大 建议重建配置文件]\n"
+          + "\n"
+          + "v1.9\n"
           + "1. 新增 更多机型适配（目前 11 款）\n"
           + "2. 优化 滚动流畅度，修复部分场景卡顿\n"
           + "3. 优化 页面、导航栏、弹窗全部重构\n"
@@ -479,8 +489,6 @@ public class AboutPage {
           + "8. 修复 从后台回到应用时跳回状态页\n"
           + "9. 修复 竖向滚动列表时误触发翻页\n"
           + "10. 修复 部分提示弹窗多出一个「取消」按钮\n"
-          + "\n"
-          + "本次更新改动较大，如不生效建议重建配置文件\n"
           + "\n"
           + "v1.8\n"
           + "1. 新增移轴开关，相机左上角悬浮控制（圆形/平行）\n"
@@ -495,8 +503,6 @@ public class AboutPage {
           + "10. 修复模块打开配置文件路径异常\n"
           + "11. 修复模块配置文件分割线异常\n"
           + "\n"
-          + "新增功能默认关闭，可在「核心功能」里按需开启\n"
-          + "\n"
           + "v1.7\n"
           + "1. 新增智能构图修复，AI帮拍里的智能构图按钮可以用了\n"
           + "2. 新增传奇一瞬色彩模拟，让传奇一瞬正常出片\n"
@@ -505,8 +511,6 @@ public class AboutPage {
           + "5. 传奇色彩独立成区块，界面更清爽\n"
           + "6. 旧版本升级自动补齐缺失的配置项\n"
           + "7. 状态页运行状态判断改为按 hook 成功数\n"
-          + "\n"
-          + "原色风格默认关闭，可在「核心功能」里开启\n"
           + "\n"
           + "v1.6\n"
           + "1. 新增自定义水印机型\n"
@@ -536,7 +540,8 @@ public class AboutPage {
           + "\n"
           + "v1.1\n"
           + "1. 新增 AI 水印\n"
-          + "2. 新增焦段重映射";
+          + "2. 新增焦段重映射\n";
+
 
     /** 显示更新日志：云端优先，失败用本地 */
     private void showChangelog() {

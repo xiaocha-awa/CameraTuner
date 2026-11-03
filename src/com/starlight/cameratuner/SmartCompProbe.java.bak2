@@ -1,0 +1,226 @@
+package com.starlight.cameratuner;
+
+import android.util.Log;
+
+import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.XposedHelpers;
+
+/**
+ * 智能构图 V1 Fragment 显示链路探针（纯日志，不改变任何行为）。
+ *
+ * 背景：改包后 updateSmartComposition 已走 V1，FragmentSmartComposition 也创建成功，
+ * 但 ps() 里的 w2/a.j(mode) 从未被调用（日志 getComponentDataItemBitmap 计数 0），
+ * 说明 ps() 在 F.d0 / F.Q 两道门之一就 return 了。
+ *
+ * V1 Fragment 的 ps() 逻辑：
+ *   if (!F.d0(mCurrentMode, caps))  -> setVisibility(GONE); return;
+ *   if (!F.Q(mCurrentMode))         -> setVisibility(GONE); return;
+ *   if (dp())                       -> setVisibility(VISIBLE);
+ *
+ * 重要发现：F.Q(I) 内部调用的是 w2/a.isSwitchOn(I)，
+ * 而模块此前 hook 的是 u2.H.isSwitchOn —— 完全不是同一个类，所以从没生效。
+ *
+ * 本类只打日志，用于确认到底是哪道门在拦。
+ */
+final class SmartCompProbe {
+
+    private static final String TAG = "STProbe";
+
+    private SmartCompProbe() {
+    }
+
+    private static void log(String msg) {
+        Log.i(TAG, msg);
+        XposedBridge.log("[" + TAG + "] " + msg);
+    }
+
+    /** 在相机进程里注册全部探针。由 MainHook 在 sCl 就绪后调用。 */
+    static void init(ClassLoader sCl) {
+        probeDataF_d0(sCl);
+        probeDataF_Q(sCl);
+        probeW2_isSwitchOn(sCl);
+        probeW2_j(sCl);
+        probeV1_dp(sCl);
+        probeV1_ps(sCl);
+    }
+
+    // ---------------------------------------------------------------
+    // 门 ① F.d0(int mode, l9.g caps)
+    // ---------------------------------------------------------------
+    private static void probeDataF_d0(ClassLoader sCl) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "com.android.camera.data.data.F", sCl, "d0",
+                    int.class, XposedHelpers.findClass("l9.g", sCl),
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam p) {
+                            try {
+                                int mode = (Integer) p.args[0];
+                                Object caps = p.args[1];
+                                log("F.d0 进入 mode=" + mode
+                                        + " caps=" + (caps == null ? "null" : caps.getClass().getName()));
+                            } catch (Throwable th) {
+                                log("F.d0 before 异常 " + th);
+                            }
+                        }
+
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam p) {
+                            try {
+                                log("F.d0 返回 " + p.getResult());
+                            } catch (Throwable th) {
+                                log("F.d0 after 异常 " + th);
+                            }
+                        }
+                    });
+            log("probe F.d0 注册成功");
+        } catch (Throwable th) {
+            log("!! probe F.d0 注册失败 " + th);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 门 ② F.Q(int mode) -> w2/a.isSwitchOn(mode)
+    // ---------------------------------------------------------------
+    private static void probeDataF_Q(ClassLoader sCl) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "com.android.camera.data.data.F", sCl, "Q",
+                    int.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam p) {
+                            try {
+                                int mode = (Integer) p.args[0];
+                                String val = "(读取失败)";
+                                try {
+                                    Object container = XposedHelpers.callStaticMethod(
+                                            XposedHelpers.findClass("g2.a", sCl), "j");
+                                    Object comp = XposedHelpers.callMethod(container, "x",
+                                            XposedHelpers.findClass("w2.a", sCl));
+                                    Object v = XposedHelpers.callMethod(comp, "getComponentValue",
+                                            mode);
+                                    val = String.valueOf(v);
+                                } catch (Throwable t2) {
+                                    val = "(读取失败:" + t2 + ")";
+                                }
+                                log("F.Q 进入 mode=" + mode + " getComponentValue=" + val);
+                            } catch (Throwable th) {
+                                log("F.Q before 异常 " + th);
+                            }
+                        }
+
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam p) {
+                            log("F.Q 返回 " + p.getResult());
+                        }
+                    });
+            log("probe F.Q 注册成功");
+        } catch (Throwable th) {
+            log("!! probe F.Q 注册失败 " + th);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // w2/a.isSwitchOn(int) —— 真正被 F.Q 调用的那个
+    // ---------------------------------------------------------------
+    private static void probeW2_isSwitchOn(ClassLoader sCl) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "w2.a", sCl, "isSwitchOn", int.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam p) {
+                            try {
+                                log("w2.a.isSwitchOn(" + p.args[0] + ") = " + p.getResult());
+                            } catch (Throwable th) {
+                                log("w2.a.isSwitchOn after 异常 " + th);
+                            }
+                        }
+                    });
+            log("probe w2.a.isSwitchOn 注册成功");
+        } catch (Throwable th) {
+            log("!! probe w2.a.isSwitchOn 注册失败 " + th);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // w2/a.j(int) —— dp() 里真正加载 Bitmap 的地方
+    // ---------------------------------------------------------------
+    private static void probeW2_j(ClassLoader sCl) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                    "w2.a", sCl, "j", int.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam p) {
+                            log("w2.a.j(" + p.args[0] + ") 进入");
+                        }
+
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam p) {
+                            Object r = p.getResult();
+                            log("w2.a.j 返回 " + (r == null ? "null（→ dp() 判失败）" : r.toString()));
+                        }
+                    });
+            log("probe w2.a.j 注册成功");
+        } catch (Throwable th) {
+            log("!! probe w2.a.j 注册失败 " + th);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // v1/a.dp() —— 最终可见性判定
+    // ---------------------------------------------------------------
+    private static void probeV1_dp(ClassLoader sCl) {
+        String c = "com.android.camera.fragment.smartComposition.v1.a";
+        try {
+            XposedHelpers.findAndHookMethod(c, sCl, "dp", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        boolean added = (Boolean) XposedHelpers.callMethod(
+                                p.thisObject, "isAdded");
+                        log("dp 进入  isAdded=" + added);
+                    } catch (Throwable th) {
+                        log("dp 进入 (isAdded 读取失败 " + th + ")");
+                    }
+                }
+
+                @Override
+                protected void afterHookedMethod(MethodHookParam p) {
+                    log("dp 返回 " + p.getResult()
+                            + (Boolean.TRUE.equals(p.getResult()) ? " （→ 会显示）" : " （→ 保持隐藏）"));
+                }
+            });
+            log("probe v1.a.dp 注册成功");
+        } catch (Throwable th) {
+            log("!! probe v1.a.dp 注册失败 " + th);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // v1/a.ps() —— 入口
+    // ---------------------------------------------------------------
+    private static void probeV1_ps(ClassLoader sCl) {
+        String c = "com.android.camera.fragment.smartComposition.v1.a";
+        try {
+            XposedHelpers.findAndHookMethod(c, sCl, "ps", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        int mode = XposedHelpers.getIntField(p.thisObject, "mCurrentMode");
+                        log("ps 进入 mode=" + mode);
+                    } catch (Throwable th) {
+                        log("ps 进入 (mode 读取失败)");
+                    }
+                }
+            });
+            log("probe v1.a.ps 注册成功");
+        } catch (Throwable th) {
+            log("!! probe v1.a.ps 注册失败 " + th);
+        }
+    }
+}

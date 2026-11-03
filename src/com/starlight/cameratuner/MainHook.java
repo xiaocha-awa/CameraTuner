@@ -57,11 +57,63 @@ public class MainHook implements IXposedHookLoadPackage {
     private final Set<Integer> blockMsgSet = new HashSet<>();
     { blockMsgSet.add(11); }
     private String cfgWatermarkName = "";
+    /** 水印品牌 logo（watermark.brand）：空=跟随相机原生，XIAOMI/Redmi/POCO 为相机内置资源名 */
+    private String cfgWatermarkBrand = "";
     private boolean cfgWatermarkEnable = false;
     private boolean cfgFake = true;
     private boolean cfgForceCaps = false;
     /** 原色风格：抬 l9.h.E2 闸门，让顶栏风格列表从 2 档变 3 档 */
     private boolean cfgCvNatural = false;
+    /** 实况运镜 setMutexMode 拦截（lock.mutex，默认开）：跳过超清互斥，避免 mode 231 流配置被拒 */
+    private boolean cfgLockMutex = false;
+    /** 实况运镜 120fps 上限（fps.cap，默认开）：5x 长焦跑不了 120fps，压到指定上限 */
+    private boolean cfgFpsCap = false;
+    /** 帧率上限值，默认 30 */
+    private int cfgFpsCapValue = 30;
+    /** 实况运镜 尺寸固定（size.fix，默认开）：避免 D2 反复把宽高对调导致 ImageReader 重建泄漏 */
+    private boolean cfgSizeFix = false;
+    /** c6 诊断（c6.dbg，默认开）：记录流重建的时间/线程/间隔 */
+    private boolean cfgC6Dbg = true;
+    private long lastC6Time = 0L;
+    private int c6Count = 0;
+    /** 编码器诊断（enc.dbg，默认开）：监控 Gm.o.run() 执行耗时与异常 */
+    private boolean cfgEncDbg = true;
+    /** 编码器任务限频（enc.rate），默认开 */
+    private boolean cfgEncRate = true;
+    private long cfgEncRateMs = 1000L;
+    private long lastEncRun = 0L;
+    /** d1 限频（d1.block），默认开 */
+    private boolean cfgD1Block = true;
+    private int cfgD1Pass = 3;
+    private int d1Count = 0;
+    private long d1Last = 0L;
+    private int encCount = 0;
+    /** consumePreference 诊断（pref.dbg，默认开） */
+    private boolean cfgPrefDbg = true;
+    private long lastPrefTime = 0L;
+    private int prefCount = 0;
+    /** trampoline 堆栈诊断 */
+    private boolean cfgTramDbg = true;
+    private int tramCount = 0;
+    /** 拦截 pref 49（block49，默认开）：阻止每 2 秒重建 ImageReader */
+    private boolean cfgBlock49 = false;
+    /** 49 允许的最小间隔（ms），小于此值则拦截 */
+    private long cfg49MinGap = 500L;
+    private long last49Allow = 0L;
+    private boolean pass49Once = false;
+    /** key=49 调用计数（进入模式时重置） */
+    private int key49Count = 0;
+    private long key49Last = 0L;
+    /** 每个模式允许放行的次数 */
+    private int cfg49PassCount = 1;
+    /** Handler what=2 监控 */
+    private boolean cfgHandlerDbg = true;
+    private int handlerCount = 0;
+    /** isDoingAction 超时解锁 */
+    private boolean cfgUnlockAction = true;
+    private long doingSince = 0L;
+    private int cfgUnlockTimeout = 1000;
+    private static ClassLoader sCl = null;
     /**
      * 调色盘成片修复（tone.fix，默认开）
      *
@@ -103,6 +155,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private boolean cfgFlashFix = false;
     /** 动态照片 x 超级长焦 共存（1=开启，默认 0） */
     private boolean cfgLiveSupTele = false;
+    /** 2 亿像素按快门闪退修复（1=开启，默认 1；根治 mPixelManager 空指针） */
+    private boolean cfgPixelFix = true;
     /** 日志过滤：为空=全部输出，否则只输出这些标签（如 tilt,zoom） */
     private final Set<String> logFilter = new HashSet<>();
     private boolean cfgAiWm = true;         // AI水印闸门
@@ -205,6 +259,11 @@ public class MainHook implements IXposedHookLoadPackage {
             hookWatermarkName(lp.classLoader);
         }
 
+        // 7.7 水印品牌 logo
+        if (cfgWatermarkEnable) {
+            hookWatermarkBrand(lp.classLoader);
+        }
+
         // 8. 模式可见性（enable_mode / disable_mode）
         hookModeVisibility(lp.classLoader);
 
@@ -231,11 +290,53 @@ public class MainHook implements IXposedHookLoadPackage {
         // 写入状态文件（供 App 读取）
         writeStatus();
 
+        // 11b. 智能构图 V3 门（独立验证：无条件抬 l9.h.V3）
+        try {
+            SmartCompV3.init(lp);
+        } catch (Throwable t) {
+            loge("SmartCompV3 init 失败: " + t);
+        }
+
+        // 11c. 智能构图 V2 门（抬 l9.h.U3，走云端 AI 分支）
+        try {
+            SmartCompV2.init(lp.classLoader);
+        } catch (Throwable t) {
+            loge("SmartCompV2 init 失败: " + t);
+        }
+
+        // 11d. 智能构图 Fragment 替换（V1 构图小窗 -> V2 智能构图）
+        try {
+            SmartCompFrag.init(lp.classLoader);
+        } catch (Throwable t) {
+            loge("SmartCompFrag init 失败: " + t);
+        }
+
+        // 11e. 智能构图挂起原因探针（纯日志）
+        try {
+            SmartCompProbe2.init(lp.classLoader);
+        } catch (Throwable t) {
+            loge("SmartCompProbe2 init 失败: " + t);
+        }
+
+        // 11f. ASD 拦截器链探针（查 emitter 为什么是 null）
+        try {
+            AsdChainProbe.init(lp.classLoader);
+        } catch (Throwable t) {
+            loge("AsdChainProbe init 失败: " + t);
+        }
+
         // 12. 智能构图修复（移植自 XiaomiCamPort SmartCompFix）
         try {
             SmartCompFix.init(lp);
         } catch (Throwable t) {
             loge("SmartCompFix init 失败: " + t);
+        }
+
+        // 12b. 智能构图 V1 显示链路探针（纯日志）
+        try {
+            SmartCompProbe.init(lp.classLoader);
+        } catch (Throwable t) {
+            loge("SmartCompProbe init 失败: " + t);
         }
 
         // 13. 传奇一瞬色彩模拟（移植自 XiaomiCamPort LegendaryColor）
@@ -262,6 +363,15 @@ public class MainHook implements IXposedHookLoadPackage {
             } catch (Throwable t) {
                 loge("LiveSupTeleFix init 失败: " + t);
             }
+        }
+
+        // 16. 2 亿像素按快门闪退修复（移植自 XiaomiCamPort PixelFix）
+        try {
+            if (PixelFix.init(this, lp.classLoader, cfgPixelFix) > 0) {
+                countHook();
+            }
+        } catch (Throwable t) {
+            loge("PixelFix init 失败: " + t);
         }
     }
 
@@ -1014,6 +1124,35 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
+    /**
+     * 水印品牌 logo：Pe.b.z() 返回 String（内部取 x()[0]），
+     * 该值被作为 deviceLogo 传给 watermark/a.J0(w0, x0, ...)，
+     * 相机据此查找对应的品牌图。填错或不存在会查不到图。
+     * 可选值即相机内置资源名：XIAOMI / Redmi / POCO
+     *
+     * 配置：watermark.brand（留空 = 不改动，用相机原生品牌）
+     */
+    private void hookWatermarkBrand(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClass("Pe.b", cl);
+            XposedHelpers.findAndHookMethod(c, "z", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (cfgWatermarkBrand != null && !cfgWatermarkBrand.isEmpty()) {
+                        if (!cfgWatermarkBrand.equals(param.getResult())) {
+                            logi("[wm] 品牌 [" + param.getResult() + "] -> [" + cfgWatermarkBrand + "]");
+                            param.setResult(cfgWatermarkBrand);
+                        }
+                    }
+                }
+            });
+            countHook();
+            logi("[wm] 已 hook Pe.b.z()，品牌 = " + cfgWatermarkBrand);
+        } catch (Throwable t) {
+            loge("[wm] 品牌 hook 失败: " + t);
+        }
+    }
+
     // ==================== 模式可见性（enable_mode / disable_mode） ====================
 
     /**
@@ -1196,6 +1335,580 @@ public class MainHook implements IXposedHookLoadPackage {
             }
         } catch (Throwable t) {
             logi("[aiwm] 诊断 hook 失败: " + t);
+        }
+    }
+
+    // ==================== d1 Surface 重建限次 ====================
+
+    /**
+     * 症状：红毯运镜卡死（buffer 耗尽）、按快门 onCameraException(0x101)。
+     * 根因：U5() → t$a.run() → l9.z0.d1() 每次重建 Surface/ImageReader，
+     *       每 2 秒一次，导致 buffer 耗尽 + setRepeatingBurst 时 Surface 不在会话里。
+     * 修法：限制 d1 调用次数，前 N 次放行（初始化），之后跳过。
+     */
+    private void hookD1(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists("l9.z0", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [D1] 找不到 l9.z0");
+                return;
+            }
+            Method m = null;
+            for (Method mm : c.getDeclaredMethods()) {
+                if (!"d1".equals(mm.getName())) continue;
+                Class<?>[] pt = mm.getParameterTypes();
+                if (pt.length == 3
+                        && pt[0].getName().equals("android.view.Surface")) {
+                    m = mm;
+                    break;
+                }
+            }
+            if (m == null) {
+                XposedBridge.log(TAG + " [D1] 找不到 l9.z0.d1(Surface,Gm/u,Handler)");
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        long now = System.currentTimeMillis();
+                        if (now - d1Last > 10000L) d1Count = 0;
+                        d1Last = now;
+                        d1Count++;
+                        if (d1Count > cfgD1Pass) {
+                            param.setResult(null);
+                            XposedBridge.log(TAG + " [D1] 第" + d1Count + "次，跳过 d1");
+                        } else {
+                            XposedBridge.log(TAG + " [D1] 第" + d1Count + "次，放行 d1");
+                        }
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + " [D1] err " + t);
+                    }
+                }
+            });
+            hookCount++;
+            XposedBridge.log(TAG + " [D1] 已 hook l9.z0.d1，前 " + cfgD1Pass + " 次放行");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [D1] hook 失败: " + t);
+        }
+    }
+
+    // ==================== isDoingAction 超时解锁 ====================
+
+    /**
+     * 症状：按快门后卡死，全部按钮失效，但预览 60fps、旋转正常。
+     * 原因：CameraSnapView 按下时 sendEmptyMessageDelayed(2, 600ms)，
+     *       抬起/结束后本该 removeMessages(2)，但没撤掉，
+     *       导致 hasMessages(2) 永远 true → isDoingAction() 永远 true → 界面锁死。
+     * 修法：isDoingAction() 连续返回 true 超过 1 秒后，强制返回 false 解锁。
+     */
+    private void hookIsDoingAction(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists(
+                    "com.android.camera.features.mode.masterlive.MasterLiveModule", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [UNLOCK] 找不到 MasterLiveModule");
+                return;
+            }
+            Method m = null;
+            for (Method mm : c.getDeclaredMethods()) {
+                if ("isDoingAction".equals(mm.getName())
+                        && mm.getParameterTypes().length == 0
+                        && mm.getReturnType() == boolean.class) {
+                    m = mm;
+                    break;
+                }
+            }
+            if (m == null) {
+                XposedBridge.log(TAG + " [UNLOCK] 找不到 isDoingAction()Z");
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        boolean r = (Boolean) param.getResult();
+                        if (!r) {
+                            doingSince = 0L;
+                            return;
+                        }
+                        long now = System.currentTimeMillis();
+                        if (doingSince == 0L) {
+                            doingSince = now;
+                        } else if (now - doingSince > cfgUnlockTimeout) {
+                            param.setResult(false);
+                            XposedBridge.log(TAG + " [UNLOCK] isDoingAction 超过 "
+                                    + (now - doingSince) + "ms，强制返回 false");
+                        }
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + " [UNLOCK] err " + t);
+                    }
+                }
+            });
+            hookCount++;
+            XposedBridge.log(TAG + " [UNLOCK] 已 hook isDoingAction");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [UNLOCK] hook 失败: " + t);
+        }
+    }
+
+    // ==================== Handler what=2 监控 ====================
+
+    /** 监控 Handler.sendEmptyMessageDelayed，记录 what=2 的调用堆栈与延迟 */
+    private void hookHandlerMsg(ClassLoader cl) {
+        try {
+            Class<?> c = Class.forName("android.os.Handler", false, cl);
+            Method m = c.getDeclaredMethod("sendEmptyMessageDelayed", int.class, long.class);
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        int what = (Integer) param.args[0];
+                        long delay = (Long) param.args[1];
+                        // 只关心小 what 值且 delay 在 0-10000ms 之间（录像定时器特征）
+                        if (what > 16) return;
+                        if (delay < 0 || delay > 15000) return;
+                        handlerCount++;
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("[HDBG] #").append(handlerCount)
+                          .append(" what=").append(what)
+                          .append(" delay=").append(delay).append("ms")
+                          .append(" main=").append(android.os.Looper.myLooper()
+                                  == android.os.Looper.getMainLooper());
+                        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+                        int limit = Math.min(st.length, 16);
+                        for (int i = 4; i < limit; i++) {
+                            sb.append(" | ").append(st[i].getClassName())
+                              .append(".").append(st[i].getMethodName())
+                              .append(":").append(st[i].getLineNumber());
+                        }
+                        XposedBridge.log(TAG + " " + sb);
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + " [HDBG] err " + t);
+                    }
+                }
+            });
+            hookCount++;
+            XposedBridge.log(TAG + " [HDBG] 已 hook Handler.sendEmptyMessageDelayed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [HDBG] hook 失败: " + t);
+        }
+    }
+
+    // ==================== trampoline 堆栈诊断 ====================
+
+    /** hook updatePreferenceTrampoline(int[])，包含 49 时打印调用堆栈 */
+    private void hookPrefTrampoline(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists("com.android.camera.module.t", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [TRAMDBG] 找不到 module.t");
+                return;
+            }
+            int n = 0;
+            for (Method mm : c.getDeclaredMethods()) {
+                if (!"updateParameters".equals(mm.getName())) continue;
+                XposedBridge.hookMethod(mm, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            boolean has49 = false;
+                            for (Object a : param.args) {
+                                if (a instanceof int[]) {
+                                    for (int v : (int[]) a) {
+                                        if (v == 49) { has49 = true; break; }
+                                    }
+                                }
+                            }
+                            if (!has49) return;
+                            tramCount++;
+                            StringBuilder sb = new StringBuilder();
+                            sb.append("[TRAMDBG] #").append(tramCount)
+                              .append(" 含49 线程=").append(Thread.currentThread().getName())
+                              .append(" main=").append(android.os.Looper.myLooper()
+                                      == android.os.Looper.getMainLooper());
+                            StackTraceElement[] st = Thread.currentThread().getStackTrace();
+                            int limit = Math.min(st.length, 22);
+                            for (int i = 3; i < limit; i++) {
+                                sb.append(" | ").append(st[i].getClassName())
+                                  .append(".").append(st[i].getMethodName())
+                                  .append(":").append(st[i].getLineNumber());
+                            }
+                            XposedBridge.log(TAG + " " + sb);
+                        } catch (Throwable t) {
+                            XposedBridge.log(TAG + " [TRAMDBG] err " + t);
+                        }
+                    }
+                });
+                n++;
+            }
+            if (n == 0) XposedBridge.log(TAG + " [TRAMDBG] 找不到 updateParameters");
+            else {
+                hookCount++;
+                XposedBridge.log(TAG + " [TRAMDBG] 已 hook " + n + " 个 updateParameters");
+            }
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [TRAMDBG] hook 失败: " + t);
+        }
+    }
+
+    // ==================== consumePreference 诊断 ====================
+
+    /** 记录 MasterLiveModule.consumePreference(int) 收到的 key 和间隔 */
+    private void hookConsumePref(ClassLoader cl) {
+        sCl = cl;
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists(
+                    "com.android.camera.features.mode.masterlive.MasterLiveModule", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [PREFDBG] 找不到 MasterLiveModule");
+                return;
+            }
+            Method m = null;
+            for (Method mm : c.getDeclaredMethods()) {
+                if ("consumePreference".equals(mm.getName())
+                        && mm.getParameterTypes().length == 1
+                        && mm.getParameterTypes()[0] == int.class) {
+                    m = mm;
+                    break;
+                }
+            }
+            if (m == null) {
+                XposedBridge.log(TAG + " [PREFDBG] 找不到 consumePreference(I)");
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        int key = (Integer) param.args[0];
+                        long now = System.currentTimeMillis();
+                        long gap = (lastPrefTime == 0L) ? 0L : (now - lastPrefTime);
+                        lastPrefTime = now;
+                        prefCount++;
+                        boolean main = (android.os.Looper.myLooper()
+                                == android.os.Looper.getMainLooper());
+                        XposedBridge.log(TAG + " [PREFDBG] #" + prefCount
+                                + " key=" + key + "(0x" + Integer.toHexString(key) + ")"
+                                + " gap=" + gap + "ms main=" + main);
+                        if (key == 49) {
+                            String tp = "?";
+                            try {
+                                Object self = param.thisObject;
+                                Object comp = XposedHelpers.callStaticMethod(
+                                        XposedHelpers.findClass("g2.a", sCl), "j");
+                                Object g0 = XposedHelpers.callMethod(comp, "x",
+                                        XposedHelpers.findClass("v2.g0", sCl));
+                                Object t = XposedHelpers.getObjectField(g0, "e");
+                                if (t != null) tp = String.valueOf(t);
+                            } catch (Throwable ignored) {}
+                            XposedBridge.log(TAG + " [PREFDBG] key=49 触发 type=" + tp
+                                    + " block49=" + cfgBlock49);
+                            long now49 = System.currentTimeMillis();
+                            if (now49 - key49Last > 10000L) {
+                                key49Count = 0;
+                                XposedBridge.log(TAG + " [PREFDBG] 距上次 >10s，重置 key49 计数");
+                            }
+                            key49Last = now49;
+                            key49Count++;
+                            if (cfgBlock49) {
+                                if (key49Count <= cfg49PassCount) {
+                                    XposedBridge.log(TAG + " [PREFDBG] 第" + key49Count
+                                            + "次放行 key=49 (type=" + tp + ")");
+                                } else {
+                                    param.setResult(Boolean.TRUE);
+                                    XposedBridge.log(TAG + " [PREFDBG] 第" + key49Count
+                                            + "次拦截 key=49 (type=" + tp + ")");
+                                }
+                            }
+                        }
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + " [PREFDBG] err " + t);
+                    }
+                }
+            });
+            hookCount++;
+            XposedBridge.log(TAG + " [PREFDBG] 已 hook MasterLiveModule.consumePreference");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [PREFDBG] hook 失败: " + t);
+        }
+    }
+
+    // ==================== 编码器诊断 ====================
+
+    /** 监控 Gm.o.run()（编码器构建任务），记录耗时、异常、结果 */
+    private void hookEncoderDebug(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists("Gm.o", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [ENCDBG] 找不到 Gm.o");
+                return;
+            }
+            Method m = null;
+            for (Method mm : c.getDeclaredMethods()) {
+                if ("run".equals(mm.getName()) && mm.getParameterTypes().length == 0) {
+                    m = mm;
+                    break;
+                }
+            }
+            if (m == null) {
+                XposedBridge.log(TAG + " [ENCDBG] 找不到 Gm.o.run()");
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                private final ThreadLocal<Long> t0 = new ThreadLocal<>();
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    t0.set(System.currentTimeMillis());
+                    if (cfgEncRate) {
+                        long now = System.currentTimeMillis();
+                        long d = now - lastEncRun;
+                        if (d < cfgEncRateMs) {
+                            param.setResult(null);
+                            XposedBridge.log(TAG + " [ENCDBG] 限频跳过 run() (距上次 " + d + "ms)");
+                            return;
+                        }
+                        lastEncRun = now;
+                    }
+                }
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Long st = t0.get();
+                        long dur = (st == null) ? -1 : (System.currentTimeMillis() - st);
+                        encCount++;
+                        Throwable th = param.getThrowable();
+                        XposedBridge.log(TAG + " [ENCDBG] #" + encCount
+                                + " run() 耗时=" + dur + "ms"
+                                + (th != null ? (" 抛异常=" + th) : " 正常返回"));
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + " [ENCDBG] err " + t);
+                    }
+                }
+            });
+            hookCount++;
+            XposedBridge.log(TAG + " [ENCDBG] 已 hook Gm.o.run()");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [ENCDBG] hook 失败: " + t);
+        }
+    }
+
+    // ==================== c6 诊断 ====================
+
+    /** 只记录 Gm.t.c6(Sh.t) 的调用时间/线程/间隔，不改变行为 */
+    private void hookC6Debug(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists("Gm.t", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [C6DBG] 找不到 Gm.t");
+                return;
+            }
+            Method m = null;
+            for (Method mm : c.getDeclaredMethods()) {
+                if ("c6".equals(mm.getName()) && mm.getParameterTypes().length == 1) {
+                    m = mm;
+                    break;
+                }
+            }
+            if (m == null) {
+                XposedBridge.log(TAG + " [C6DBG] 找不到 Gm.t.c6(1参)");
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        long now = System.currentTimeMillis();
+                        long gap = (lastC6Time == 0L) ? 0L : (now - lastC6Time);
+                        lastC6Time = now;
+                        c6Count++;
+                        boolean main = (android.os.Looper.myLooper()
+                                == android.os.Looper.getMainLooper());
+                        XposedBridge.log(TAG + " [C6DBG] #" + c6Count
+                                + " gap=" + gap + "ms"
+                                + " thread=" + Thread.currentThread().getName()
+                                + " main=" + main);
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + " [C6DBG] err " + t);
+                    }
+                }
+            });
+            hookCount++;
+            XposedBridge.log(TAG + " [C6DBG] 已 hook Gm.t.c6");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [C6DBG] hook 失败: " + t);
+        }
+    }
+
+    // ==================== 实况运镜 尺寸固定 ====================
+
+    /**
+     * 症状：进入红毯运镜后，日志每 2 秒出现一次
+     *   createImageReader eis 1792x1008, maxImages = 34
+     * 且 srcSize 在 1920x1080 / 1080x1920 之间反复横跳 → 每次重建泄漏 34 个 buffer
+     * → ImageReader_JNI: Unable to acquire a buffer item → 出帧 0.96fps
+     *
+     * 根因（cam2090 反编译 smali_classes8/Gm/t.smali）：
+     *   .method public final D2()Landroid/util/Size;
+     *     ... mLoadStreamSizeBase.F.get(Lm6/o$b;->S) 取到 Size
+     *     new-instance Size
+     *     invoke-virtual getHeight()   ← 先取高
+     *     invoke-virtual getWidth()    ← 再取宽  → 宽高对调，变竖屏
+     *
+     * 修法：hook D2()，执行后把返回的 Size 宽高换回来（保持横屏），尺寸就稳定了。
+     */
+    private void hookLiveShotSize(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists("Gm.t", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [SIZEDBG] 找不到 Gm.t");
+                return;
+            }
+            Method m = null;
+            for (Method mm : c.getDeclaredMethods()) {
+                if ("D2".equals(mm.getName())
+                        && mm.getParameterTypes().length == 0
+                        && mm.getReturnType().getName().equals("android.util.Size")) {
+                    m = mm;
+                    break;
+                }
+            }
+            if (m == null) {
+                XposedBridge.log(TAG + " [SIZEDBG] 找不到 Gm.t.D2()Size");
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Object r = param.getResult();
+                        if (!(r instanceof android.util.Size)) return;
+                        android.util.Size sz = (android.util.Size) r;
+                        if (sz.getWidth() >= sz.getHeight()) return; // 已经是横屏
+                        android.util.Size fixed = new android.util.Size(sz.getHeight(), sz.getWidth());
+                        param.setResult(fixed);
+                        XposedBridge.log(TAG + " [SIZEDBG] D2 转回横屏 " + sz + " -> " + fixed);
+                    } catch (Throwable t) {
+                        XposedBridge.log(TAG + " [SIZEDBG] D2 异常: " + t);
+                    }
+                }
+            });
+            hookCount++;
+            XposedBridge.log(TAG + " [SIZEDBG] 已 hook Gm.t.D2()");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [SIZEDBG] hook 失败: " + t);
+        }
+    }
+
+    // ==================== 实况运镜 帧率上限 ====================
+
+    /**
+     * 红毯运镜需要 120fps，但实际出帧只有 0.96fps。
+     * 在 CaptureRequest 构建阶段把 CONTROL_AE_TARGET_FPS_RANGE 压到 30fps。
+     *
+     * 依据（cam2090 反编译，smali_classes3/l9.1/n0.1.smali）：
+     *   .method public static d0(Landroid/hardware/camera2/CaptureRequest$Builder;Ll9/j0;)V
+     *     iget-object p1, p1, Ll9/j0;->f:Landroid/util/Range;   // 读出 fpsRange
+     *     log "applyFpsRange: fpsRange = "
+     *     invoke-static {p0, CONTROL_AE_TARGET_FPS_RANGE, p1, v1}, Lia/D0;->c(...)
+     *   所以 hook d0，把 j0.f 换成 [30,30] 即可。
+     */
+    private void hookFpsRange(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists("l9.n0", cl);
+            if (c == null) {
+                XposedBridge.log(TAG + " [FPSDBG] " + "找不到 l9.n0");
+                return;
+            }
+            int n = 0;
+            for (Method mm : c.getDeclaredMethods()) {
+                if (!"d0".equals(mm.getName())) continue;
+                Class<?>[] pt = mm.getParameterTypes();
+                if (pt.length != 2
+                        || !pt[0].getName().equals("android.hardware.camera2.CaptureRequest$Builder")) continue;
+                final Class<?> cfgCls = pt[1];
+                XposedBridge.hookMethod(mm, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object cfg = param.args[1];
+                            if (cfg == null) return;
+                            Object r = XposedHelpers.getObjectField(cfg, "f");
+                            if (!(r instanceof android.util.Range)) return;
+                            android.util.Range<?> rg = (android.util.Range<?>) r;
+                            int up = ((Number) rg.getUpper()).intValue();
+                            int low = ((Number) rg.getLower()).intValue();
+                            if (up <= cfgFpsCapValue) return;
+                            android.util.Range<Integer> nr =
+                                    new android.util.Range<>(Math.min(low, cfgFpsCapValue), cfgFpsCapValue);
+                            XposedHelpers.setObjectField(cfg, "f", nr);
+                            XposedBridge.log(TAG + " [FPSDBG] " + "d0 压帧率 " + rg + " -> " + nr);
+                        } catch (Throwable t) {
+                            XposedBridge.log(TAG + " [FPSDBG] " + "d0 异常: " + t);
+                        }
+                    }
+                });
+                n++;
+                XposedBridge.log(TAG + " [FPSDBG] " + "已 hook l9.n0.d0 参数=" + pt[0].getSimpleName() + "," + pt[1].getName());
+            }
+            if (n == 0) XposedBridge.log(TAG + " [FPSDBG] " + "没找到 l9.n0.d0");
+            else hookCount++;
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " [FPSDBG] " + "hook 失败: " + t);
+        }
+    }
+
+    // ==================== 实况运镜 超清互斥拦截 ====================
+
+    /**
+     * 实况运镜（mode 231）进入时，Camera2Module.updateSuperResolution() 会触发
+     * MutexModeManager.e(2)（打印 "setMutexMode 2"），紧接着 HAL 抛 onCameraException
+     * -> 首次进入崩溃 / 二次进入卡死且拍不了。
+     * 这里在 mode 231 时直接跳过 updateSuperResolution()，从源头断开超清互斥。
+     *
+     * 依据（cam2090 反编译）：
+     *   E1/n4.1.smali .method e(I)V  -> 打印 "setMutexMode " + mode
+     *   Camera2Module.smali .method public updateSuperResolution()V -> 调用它
+     */
+    private void hookMutexMode(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClassIfExists(
+                    "com.android.camera.module.Camera2Module", cl);
+            if (c == null) {
+                loge("[lockmutex] 找不到 Camera2Module");
+                return;
+            }
+            Method m = null;
+            for (Method mm : c.getDeclaredMethods()) {
+                if ("updateSuperResolution".equals(mm.getName())
+                        && mm.getParameterTypes().length == 0) {
+                    m = mm;
+                    break;
+                }
+            }
+            if (m == null) {
+                loge("[lockmutex] 找不到 updateSuperResolution()");
+                return;
+            }
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    Object self = param.thisObject;
+                    if (self == null) return;
+                    int mode = -1;
+                    try {
+                        Object mo = XposedHelpers.callMethod(self, "getModuleIndex");
+                        if (mo instanceof Integer) mode = (Integer) mo;
+                    } catch (Throwable ignored) {}
+                    if (mode != 231) return;
+                    logiTag("lockmutex", "mode231 跳过 updateSuperResolution: " + self.getClass().getName());
+                    param.setResult(null);
+                }
+            });
+            hookCount++;
+            logi("[lockmutex] 已 hook Camera2Module.updateSuperResolution()");
+        } catch (Throwable t) {
+            loge("[lockmutex] hook 失败: " + t);
         }
     }
 
@@ -1855,6 +2568,9 @@ public class MainHook implements IXposedHookLoadPackage {
                   + "enable_mode=com.android.camera.features.mode.ai.AiModuleEntry\n"
                   + "# enable_mode=com.android.camera.features.mode.cinemaster.CinemasterModuleEntry\n"
                   + "# disable_mode=com.android.camera.features.mode.cosmeticmirror.CosmeticMirrorModuleEntry\n"
+                  + "# 实况运镜在 15 Pro 上部分功能不可用（红毯拍不了、视频只有 1/4），默认隐藏防误触\n"
+                  + "# 想试用就删掉下面这行\n"
+                  + "disable_mode=com.android.camera.features.mode.masterlive.MasterLiveModuleEntry\n"
                   + "\n"
                   + "# ------------------------------------\n"
                   + "# 智能构图（AI帮拍里那个点了没反应的按钮）\n"
@@ -1884,7 +2600,24 @@ public class MainHook implements IXposedHookLoadPackage {
                   + "#   M10R 默认 71 = FILM 胶片\n"
                   + "legend.filter.m10r=73\n"
                   + "# 滤镜强度 0-100\n"
-                  + "legend.degree=100\n";
+                  + "legend.degree=100\n"
+                  + "\n"
+                  + "# ------------------------------------\n"
+                  + "# 实况运镜（MasterLive / mode 231）\n"
+                  + "# 用于解决红毯运镜卡死 / 界面锁死 / ImageReader 反复重建\n"
+                  + "# 默认值已调好，一般不用改\n"
+                  + "masterlive.unlock=1\n"
+                  + "masterlive.unlock.timeout=1000\n"
+                  + "masterlive.lockmutex=1\n"
+                  + "masterlive.fpscap=1\n"
+                  + "masterlive.fpscap.value=30\n"
+                  + "masterlive.sizefix=1\n"
+                  + "masterlive.block49=0\n"
+                  + "masterlive.pass49=1\n"
+                  + "masterlive.encrate=1\n"
+                  + "masterlive.encrate.ms=1000\n"
+                  + "masterlive.d1block=1\n"
+                  + "masterlive.d1pass=0\n";
 
             java.io.FileWriter fw = new java.io.FileWriter(f);
             fw.write(template);
@@ -1895,10 +2628,80 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
+    /** 老版本配置文件补齐 masterlive 段（只追加缺失的键，不动已有值） */
+    private void ensureMasterLiveKeys(File f) {
+        try {
+            String content = "";
+            java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(new java.io.FileInputStream(f), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line).append("\n");
+            br.close();
+            content = sb.toString();
+            if (content.contains("masterlive.unlock=")) return; // 已有，不处理
+
+            StringBuilder add = new StringBuilder();
+            add.append("\n# ------------------------------------\n");
+            add.append("# 实况运镜（MasterLive / mode 231）\n");
+            add.append("# 用于解决红毯运镜卡死 / 界面锁死 / ImageReader 反复重建\n");
+            add.append("masterlive.unlock=1\n");
+            add.append("masterlive.unlock.timeout=1000\n");
+            add.append("masterlive.lockmutex=1\n");
+            add.append("masterlive.fpscap=1\n");
+            add.append("masterlive.fpscap.value=30\n");
+            add.append("masterlive.sizefix=1\n");
+            add.append("masterlive.block49=0\n");
+            add.append("masterlive.pass49=1\n");
+            add.append("masterlive.encrate=1\n");
+            add.append("masterlive.encrate.ms=1000\n");
+            add.append("masterlive.d1block=1\n");
+            add.append("masterlive.d1pass=0\n");
+
+            java.io.FileWriter fw = new java.io.FileWriter(f, true);
+            fw.write(add.toString());
+            fw.close();
+            logi("已为旧配置补齐 masterlive 段");
+        } catch (Throwable t) {
+            loge("补齐 masterlive 配置失败: " + t);
+        }
+    }
+
+    /** 老版本配置文件补齐「实况运镜默认隐藏」（只追加，不动已有值） */
+    private void ensureMasterLiveHidden(File f) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(new java.io.FileInputStream(f), "UTF-8"));
+            String line;
+            while ((line = br.readLine()) != null) sb.append(line).append("\n");
+            br.close();
+            String content = sb.toString();
+            if (content.contains("MasterLiveModuleEntry")) return; // 已有相关配置，不处理
+
+            StringBuilder add = new StringBuilder();
+            add.append("\n# ------------------------------------\n");
+            add.append("# 实况运镜在 15 Pro 上部分功能不可用（红毯拍不了、视频只有 1/4）\n");
+            add.append("# 默认隐藏防误触。想试用就删掉下面这行\n");
+            add.append("disable_mode=com.android.camera.features.mode.masterlive.MasterLiveModuleEntry\n");
+
+            java.io.FileWriter fw = new java.io.FileWriter(f, true);
+            fw.write(add.toString());
+            fw.close();
+            logi("已为旧配置补齐「实况运镜默认隐藏」");
+        } catch (Throwable t) {
+            loge("补齐 disable_mode 失败: " + t);
+        }
+    }
+
     private void loadConfig() {
         File f = new File(CONF_PATH);
         if (!f.exists()) {
             ensureConfigExists(f);
+        }
+        if (f.exists()) {
+            ensureMasterLiveKeys(f);
+            ensureMasterLiveHidden(f);
         }
         if (!f.exists()) {
             logi("配置文件不存在且创建失败，使用默认值");
@@ -1926,6 +2729,9 @@ public class MainHook implements IXposedHookLoadPackage {
                     case "watermark.name":
                         cfgWatermarkName = v;
                         break;
+                    case "watermark.brand":
+                        cfgWatermarkBrand = v;
+                        break;
                     case "watermark.enable":
                         cfgWatermarkEnable = "1".equals(v) || "true".equalsIgnoreCase(v);
                         break;
@@ -1950,11 +2756,50 @@ public class MainHook implements IXposedHookLoadPackage {
                     case "tilt.switch":
                         cfgTiltSwitch = "1".equals(v) || "true".equalsIgnoreCase(v);
                         break;
+                    case "masterlive.unlock":
+                        cfgUnlockAction = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "masterlive.lockmutex":
+                        cfgLockMutex = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "masterlive.fpscap":
+                        cfgFpsCap = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "masterlive.sizefix":
+                        cfgSizeFix = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "masterlive.block49":
+                        cfgBlock49 = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "masterlive.pass49":
+                        try { cfg49PassCount = Integer.parseInt(v); } catch (Throwable ignored) {}
+                        break;
+                    case "masterlive.encrate":
+                        cfgEncRate = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "masterlive.encrate.ms":
+                        try { cfgEncRateMs = Long.parseLong(v); } catch (Throwable ignored) {}
+                        break;
+                    case "masterlive.d1block":
+                        cfgD1Block = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "masterlive.d1pass":
+                        try { cfgD1Pass = Integer.parseInt(v); } catch (Throwable ignored) {}
+                        break;
+                    case "masterlive.fpscap.value":
+                        try { cfgFpsCapValue = Integer.parseInt(v); } catch (Throwable ignored) {}
+                        break;
+                    case "masterlive.unlock.timeout":
+                        try { cfgUnlockTimeout = Integer.parseInt(v); } catch (Throwable ignored) {}
+                        break;
                     case "flash.fix":
                         cfgFlashFix = "1".equals(v) || "true".equalsIgnoreCase(v);
                         break;
                     case "live.supertele":
                         cfgLiveSupTele = "1".equals(v) || "true".equalsIgnoreCase(v);
+                        break;
+                    case "pixel.fix":
+                        cfgPixelFix = "1".equals(v) || "true".equalsIgnoreCase(v);
                         break;
                     case "log.filter":
                         logFilter.clear();

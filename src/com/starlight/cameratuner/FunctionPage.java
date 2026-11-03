@@ -56,6 +56,9 @@ public class FunctionPage {
         Ui.switchRow(a, card1, "live.supertele", "动态照片 + 超级长焦",
                 "开着超级长焦也能拍动态照片，两者不再互斥", R.drawable.ic_livephoto, switches);
         Ui.divider(a, card1);
+        Ui.switchRow(a, card1, "pixel.fix", "2亿像素闪退修复",
+                "开启后 2 亿像素模式按快门不再闪退（默认开）", R.drawable.ic_pixel, switches);
+        Ui.divider(a, card1);
         Ui.switchRow(a, card1, "tone.fix", "调色盘成片修复",
                 "让「原图」档的色盘参数真正作用到成片，不再只有预览生效",
                 R.drawable.ic_tone, switches);
@@ -73,11 +76,19 @@ public class FunctionPage {
         // 水印
         c.addView(Ui.sectionLabel(a, "水印"));
         LinearLayout cardWm = Ui.card(a);
-        Ui.switchRow(a, cardWm, "watermark.enable", "自定义水印机型",
-                "修改照片水印显示的机型名称", R.drawable.ic_watermark, switches);
+        Ui.switchRow(a, cardWm, "watermark.enable", "自定义水印",
+                "决定水印上的品牌与机型", R.drawable.ic_watermark, switches);
         Ui.divider(a, cardWm);
-        Ui.editRow(a, cardWm, "watermark.name", "水印机型名称",
-                "留空则显示 XIAOMI 18 Pro Max；填写时无需加 Xiaomi 前缀", edits);
+        final TextView[] brandHolder = new TextView[1];
+        brandHolder[0] = Ui.choiceRow(a, cardWm, 0,
+                "品牌标识", "决定水印左边的品牌（小米 / 红米 / POCO）",
+                brandShort(a), null,
+                new Runnable() {
+                    public void run() { showBrandPicker(a, brandHolder[0]); }
+                });
+        Ui.divider(a, cardWm);
+        Ui.editRow(a, cardWm, "watermark.name", "机型文字",
+                "决定水印右侧的机型文字，如 18 Pro Max", edits);
         c.addView(cardWm);
 
         // 模式开关
@@ -99,7 +110,7 @@ public class FunctionPage {
         LinearLayout cardZ = Ui.card(a);
         // ── 重映射组 ──
         Ui.switchRow(a, cardZ, "zoom.enable", "焦段重映射",
-                "若已安装 XiaomiCamPort，请关闭此项以免冲突", R.drawable.ic_zoom, switches);
+                "按机型自动修正焦段档位，可手动微调", R.drawable.ic_zoom, switches);
         Ui.divider(a, cardZ);
         Ui.editRow(a, cardZ, "zoom_remap", "档位重映射",
                 "格式：旧:新，逗号分隔。例：0.7:0.6,3.2:5,6.4:10", edits);
@@ -653,5 +664,122 @@ public class FunctionPage {
                                 android.widget.Toast.LENGTH_SHORT).show();
                     }
                 });
+    }
+
+    /** 品牌 logo 简短值（用于行右侧显示） */
+    private String brandShort(MainActivity a) {
+        String v = a.readRawConfig("watermark.brand");
+        if (v == null || v.trim().isEmpty()) return "跟随原生";
+        return v.trim();
+    }
+
+    /** 品牌 logo 选择弹窗（自绘列表，单选即保存） */
+    private void showBrandPicker(final MainActivity a, final TextView descView) {
+        final String[] values = {"", "XIAOMI", "Redmi", "POCO"};
+        final String[] labels = {
+                "跟随相机原生", "XIAOMI（小米）",
+                "Redmi（红米）", "POCO"
+        };
+        final String[] descs = {
+                "不改动，logo 用相机原生品牌",
+                "小米品牌图",
+                "红米品牌图",
+                "POCO 品牌图"
+        };
+        String cur = a.readRawConfig("watermark.brand");
+        int sel = 0;
+        for (int i = 0; i < values.length; i++) {
+            if (values[i].equals(cur == null ? "" : cur.trim())) { sel = i; break; }
+        }
+
+        final TunerDialog[] dlgRef = new TunerDialog[1];
+        final TextView[] boxes = new TextView[values.length];
+        LinearLayout list = new LinearLayout(a);
+        list.setOrientation(LinearLayout.VERTICAL);
+
+        for (int i = 0; i < values.length; i++) {
+            final int idx = i;
+            LinearLayout row = new LinearLayout(a);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(a.dp(4), a.dp(11), a.dp(4), a.dp(11));
+
+            LinearLayout col = new LinearLayout(a);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView label = new TextView(a);
+            label.setText(labels[i]);
+            label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14.5f);
+            label.setTextColor(MainActivity.C_TEXT_MAIN);
+            col.addView(label);
+
+            TextView sub = new TextView(a);
+            sub.setText(descs[i]);
+            sub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            sub.setTextColor(MainActivity.C_TEXT_SUB);
+            sub.setPadding(0, a.dp(3), 0, 0);
+            col.addView(sub);
+
+            row.addView(col);
+
+            final TextView box = new TextView(a);
+            box.setGravity(android.view.Gravity.CENTER);
+            box.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12);
+            box.setTextColor(0xFFFFFFFF);
+            box.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            box.setIncludeFontPadding(false);
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(a.dp(22), a.dp(22));
+            bp.leftMargin = a.dp(10);
+            box.setLayoutParams(bp);
+            applyBrandBox(a, box, i == sel);
+            boxes[i] = box;
+            row.addView(box);
+
+            row.setOnClickListener(new android.view.View.OnClickListener() {
+                public void onClick(android.view.View v) {
+                    a.writeConfig("watermark.brand", values[idx]);
+                    descView.setText(values[idx].isEmpty() ? "跟随原生" : values[idx]);
+                    android.widget.Toast.makeText(a,
+                            "已保存，重启相机后生效",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                    if (dlgRef[0] != null) dlgRef[0].dismiss();
+                }
+            });
+            list.addView(row);
+
+            if (i < values.length - 1) {
+                android.view.View line = new android.view.View(a);
+                line.setBackgroundColor(0x0C000000);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT, a.dp(1));
+                lp.leftMargin = a.dp(4);
+                lp.rightMargin = a.dp(4);
+                list.addView(line, lp);
+            }
+        }
+
+        dlgRef[0] = TunerDialog.create(a)
+                .title("品牌标识")
+                .customView(list)
+                .negative("取消", null);
+        dlgRef[0].show();
+    }
+
+    /** 品牌选项右侧勾选框样式 */
+    private void applyBrandBox(MainActivity a, TextView box, boolean on) {
+        android.graphics.drawable.GradientDrawable bg =
+                new android.graphics.drawable.GradientDrawable();
+        bg.setCornerRadius(a.dp(7));
+        if (on) {
+            bg.setColor(MainActivity.C_ACCENT);
+            box.setText("✓");
+        } else {
+            bg.setColor(0x00000000);
+            bg.setStroke((int) (a.dp(1) * 1.5f), 0x33000000);
+            box.setText("");
+        }
+        box.setBackground(bg);
     }
 }

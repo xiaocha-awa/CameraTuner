@@ -76,6 +76,10 @@ public class MainActivity extends Activity {
                     "在菜单中选择月亮模式，自动识别并增强月球细节"},
             {"夜景", "com.android.camera.features.mode.night.photo.NightModuleEntry",
                     "在菜单中选择夜景模式，长曝光合成，适合暗光环境"},
+            {"电影模式", "com.android.camera.features.mode.cinematic.CinematicModuleEntry",
+                    "解锁电影模式入口，可拍摄电影风格视频"},
+            {"实况运镜", "com.android.camera.features.mode.masterlive.MasterLiveModuleEntry",
+                    "⚠️ 打开后进入该模式会卡死，建议保持关闭"},
     };
 
     static final String[] TAB_TITLES = {"状态", "功能", "关于"};

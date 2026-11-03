@@ -840,7 +840,7 @@ public final class SmartCompFix {
             // ============================================================
             if (sLevel >= 7) {
 
-                // ---- ② tag 支持门：S0(name) 对 SemanticScene 放行 ----
+                // ---- ② tag 支持门：S0(name) 对 SemanticScene / portrait.lighting 放行 ----
                 try {
                     XposedHelpers.findAndHookMethod(C_G, sCl, "S0", String.class,
                             new XC_MethodHook() {
@@ -849,18 +849,26 @@ public final class SmartCompFix {
                                         throws Throwable {
                                     try {
                                         String n = (String) p.args[0];
-                                        if (n != null && n.contains("SemanticScene")) {
+                                        if (n == null) return;
+                                        boolean isSem = n.contains("SemanticScene");
+                                        boolean isPL = n.contains("portrait.lighting");
+                                        boolean isAsd = n.contains("asd.aiComposition");
+                                        boolean hit = isSem || isPL || isAsd;
+                                        if (hit) {
                                             p.setResult(Boolean.TRUE);
                                             logN("S0v1", "l9.g.S0(" + n
-                                                    + ") -> true（抬 v1 tag 支持门，"
-                                                    + "prepare 才会注册拦截器）", 0);
+                                                    + ") -> true（" 
+                                                    + (isSem ? "v1 tag 支持门" : (isAsd ? "ASD 智能构图能力门" : "configSmartComposition 能力门"))
+                                                    + "）", 0);
+                                        } else if (n.contains("xiaomi.") || n.contains("com.xiaomi")) {
+                                            logN("S0probe", "l9.g.S0(" + n + ") 未放行（原值返回）", 0);
                                         }
                                     } catch (Throwable th) {
                                         err(th);
                                     }
                                 }
                             });
-                    log("hook l9.g.S0 ok (SemanticScene 支持门)");
+                    log("hook l9.g.S0 ok (SemanticScene + portrait.lighting)");
                 } catch (Throwable th) {
                     log("!! hook l9.g.S0 失败 " + th);
                 }

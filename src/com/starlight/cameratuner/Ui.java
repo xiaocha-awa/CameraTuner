@@ -209,6 +209,20 @@ public class Ui {
      * 图标默认灰紫，开关打开时才变玫红（原来全橙，一片糊）。
      * 也用于「机型伪装」这种图标 + 开关的行。
      */
+    private static final String[] WARN_KEYS = {
+            "请勿", "卡死", "风险", "警告", "⚠", "失效", "崩溃"
+    };
+
+    /** 判断说明文字是否属于风险提示，命中则用警示色渲染 */
+    static boolean isWarningText(String desc) {
+        if (desc == null) return false;
+        for (String k : WARN_KEYS) {
+            if (desc.contains(k)) return true;
+        }
+        return false;
+    }
+
+
     static void switchRow(MainActivity a, LinearLayout card, final String key,
                           String title, String desc, int iconRes,
                           final java.util.Map<String, CapsuleSwitch> registry) {
@@ -245,8 +259,8 @@ public class Ui {
             TextView d = new TextView(a);
             d.setText(desc);
             d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-            // 含"请勿"的说明用警示橙（不再用主色，避免和主色混淆）   #修改
-            d.setTextColor(desc.contains("请勿") ? MainActivity.C_ORANGE : MainActivity.C_TEXT_SUB);
+            // 风险提示用警示橙：命中关键词即变色（不再用主色，避免和主色混淆）
+            d.setTextColor(isWarningText(desc) ? MainActivity.C_ORANGE : MainActivity.C_TEXT_SUB);
             d.setPadding(0, a.dp(4), 0, 0);
             col.addView(d);
         }
@@ -337,5 +351,76 @@ public class Ui {
                     }
                 });
         td.show();
+    }
+
+    /**
+     * 可点击选择行：图标 + 标题 + 副标题 + 右侧当前值 + 箭头。
+     * 点击整行触发 onClick。
+     *
+     * @param valueTag 非空时写入 setTag("value:"+valueTag)，可被 refreshValueLabels 自动刷新
+     * @return 右侧显示值的 TextView（供调用方手动更新）
+     */
+    static TextView choiceRow(MainActivity a, LinearLayout card, int iconRes,
+                              String title, String desc, String value, String valueTag,
+                              final Runnable onClick) {
+        LinearLayout row = new LinearLayout(a);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(a.dp(20), a.dp(14), a.dp(14), a.dp(14));
+
+        if (iconRes != 0) {
+            ImageView iv = new ImageView(a);
+            iv.setImageResource(iconRes);
+            iv.setColorFilter(MainActivity.C_ACCENT);
+            LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(a.dp(22), a.dp(22));
+            ip.rightMargin = a.dp(14);
+            iv.setLayoutParams(ip);
+            row.addView(iv);
+        }
+
+        LinearLayout col = new LinearLayout(a);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView t = new TextView(a);
+        t.setText(title);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        t.setTextColor(MainActivity.C_TEXT_MAIN);
+        col.addView(t);
+
+        if (desc != null && !desc.isEmpty()) {
+            TextView d = new TextView(a);
+            d.setText(desc);
+            d.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            d.setTextColor(isWarningText(desc) ? MainActivity.C_ORANGE : MainActivity.C_TEXT_SUB);
+            d.setPadding(0, a.dp(4), 0, 0);
+            col.addView(d);
+        }
+        row.addView(col);
+
+        TextView valueView = new TextView(a);
+        valueView.setText(value == null ? "" : value);
+        valueView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        valueView.setTextColor(MainActivity.C_ACCENT);
+        valueView.setPadding(a.dp(8), 0, 0, 0);
+        if (valueTag != null && !valueTag.isEmpty()) {
+            valueView.setTag("value:" + valueTag);
+        }
+        row.addView(valueView);
+
+        TextView arrow = new TextView(a);
+        arrow.setText("\u203a");
+        arrow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        arrow.setTextColor(0xFFC7C7CC);
+        arrow.setPadding(a.dp(6), 0, 0, 0);
+        row.addView(arrow);
+
+        row.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { onClick.run(); }
+        });
+
+        card.addView(row);
+        return valueView;
     }
 }
